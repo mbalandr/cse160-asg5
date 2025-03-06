@@ -30,8 +30,8 @@ Referenced three.js manual examples for most of the assignment. All my libraries
 <script type="importmap">
 {
   "imports": {
-    "three": "/lib/three.module.js",
-    "three/addons/": "/lib/"
+    "three": "./lib/three.module.js",
+    "three/addons/": "./lib/"
   }
 }
 </script>
@@ -520,7 +520,7 @@ function main() {
 	// GLTF/GLB Loader
 	{
 		const gltfLoader = new GLTFLoader();
-		gltfLoader.load( 'src/resources/threejsTest.glb', ( gltf ) => {
+		gltfLoader.load( 'src/threejsTest.glb', ( gltf ) => {
 			const root = gltf.scene;
 			scene.add( root );
 
