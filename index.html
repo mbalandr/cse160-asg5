@@ -1,0 +1,786 @@
+<!--
+Mariah Balandran
+mbalandr@ucsc.edu
+
+Notes to Grader:
+Referenced three.js manual examples for most of the assignment. All my libraries are from the three.js manual except UnrealBloomPass and LuminosityHighPassShader which are from https://threejs.org/examples/webgl_postprocessing_unreal_bloom.html. Then I referenced claude.ai for help with the geometry for the stars. I made the glb model myself in Nomad Sculpt, the floor texture is by Laura Tancredi from Pexels: https://www.pexels.com/photo/white-marble-tiles-7078686/, the skybox is from Adobe Stock https://stock.adobe.com/search/images?k=skybox
+-->
+
+<!DOCTYPE html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+    <title>Dreamy Sky</title>
+    <style>
+    html, body {
+        margin: 0;
+        height: 100%;
+    }
+    #c {
+        width: 100%;
+        height: 100%;
+        display: block;
+    }
+    </style>
+  </head>
+  <body>
+    <canvas id="c"></canvas>
+  </body>
+<script type="importmap">
+{
+  "imports": {
+    "three": "/lib/three.module.js",
+    "three/addons/": "/lib/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { GUI } from 'three/addons/libs/lil-gui.module.min.js';
+
+function main() {
+
+	const canvas = document.querySelector( '#c' );
+	const renderer = new THREE.WebGLRenderer( { antialias: true, canvas } );
+	renderer.shadowMap.enabled = true;
+	renderer.setPixelRatio( window.devicePixelRatio );
+	renderer.toneMapping = THREE.ReinhardToneMapping;
+
+	// Define bloom layer constant
+	const BLOOM_SCENE = 1;
+	const bloomLayer = new THREE.Layers();
+	bloomLayer.set( BLOOM_SCENE );
+
+	// Materials for bloom rendering
+	const darkMaterial = new THREE.MeshBasicMaterial( { color: 'black' } );
+	const materials = {};
+
+	const params = {
+		threshold: 0.75,
+		strength: 1,
+		radius: 0.1,
+		exposure: 1,
+		grayscale: false,
+		backgroundColor: '#8d3471', // pink
+		starRotation: true,
+		starCount: 50,
+		starSize: 0.5,
+		starColors: ['#FFE48B'],
+		cloudCount: 50,
+		hoverIntensity: 4.0,  // Emission intensity when hovering
+		normalIntensity: 0.8, // Normal emission intensity
+	};
+
+	var star;
+	var star_1;
+
+	const fov = 45;
+	const aspect = 2; // the canvas default
+	const near = 0.1;
+	const far = 100;
+	const camera = new THREE.PerspectiveCamera( fov, aspect, near, far );
+	camera.position.set( 0, 10, 20 );
+
+	const controls = new OrbitControls( camera, canvas );
+	controls.target.set( 0, 5, 0 );
+	controls.update();
+
+	const raycaster = new THREE.Raycaster();
+	const pointer = new THREE.Vector2();
+	let hoveredStar = null;
+
+	const scene = new THREE.Scene();
+	scene.background = new THREE.Color( params.backgroundColor );
+
+	// Fog for background
+	{
+
+		const bgFogPlane = new THREE.Mesh(
+			new THREE.PlaneGeometry(500, 500),  // Large plane
+			new THREE.MeshBasicMaterial({ 
+				color: 0xff8bfc, // Same color as fog
+				side: THREE.DoubleSide 
+			})
+		);
+		bgFogPlane.position.set(0, 0, -100); // Position it far behind the skybox
+		scene.add(bgFogPlane);
+
+	}
+
+	{
+
+		// Load skybox texture
+		const loader = new THREE.TextureLoader();
+		const texture = loader.load(
+			'src/resources/images/equirectangularmaps/360_F_924353782_XH59548nShgJrG3ftWMONLzMOJgMJ7qA.jpg',
+			() => {
+				texture.mapping = THREE.EquirectangularReflectionMapping;
+				texture.colorSpace = THREE.SRGBColorSpace;
+			}
+		);
+
+		// Create a large cube to act as the skybox
+		const skyboxSize = 100; // Ensure it's large enough
+		const skyboxGeo = new THREE.BoxGeometry(skyboxSize, skyboxSize, skyboxSize);
+		const skyboxMat = new THREE.MeshBasicMaterial({
+			map: texture,
+			side: THREE.BackSide, // Render inside of the cube
+		});
+
+		// Create the skybox mesh
+		const skybox = new THREE.Mesh(skyboxGeo, skyboxMat);
+		scene.add(skybox);
+
+		// Ensure not affected by fog
+		skybox.material.fog = false;
+
+
+	}
+
+	// Fog for foreground
+	{
+
+		const near = 1;
+		const far = 40;
+		const color = '#ff8bfc';
+		scene.fog = new THREE.Fog( color, near, far );
+		scene.background = new THREE.Color( color );
+
+	}
+
+	// Replace floor plane with a cube
+	{
+		const cubeSize = 100;
+
+		const loader = new THREE.TextureLoader();
+		const texture = loader.load( 'src/resources/images/marbleFloor.jpg' );
+		texture.wrapS = THREE.RepeatWrapping;
+		texture.wrapT = THREE.RepeatWrapping;
+		texture.magFilter = THREE.NearestFilter;
+		texture.colorSpace = THREE.SRGBColorSpace;
+
+		// Create a cube geometry instead of a plane
+		const cubeGeo = new THREE.BoxGeometry(cubeSize, cubeSize, cubeSize);
+		const cubeMat = new THREE.MeshPhongMaterial({
+			map: texture,
+			side: THREE.FrontSide, // side: THREE.DoubleSide,
+		});
+		
+		const cube = new THREE.Mesh(cubeGeo, cubeMat);
+		cube.receiveShadow = true;
+		
+		// Position the cube so its top face is at y=0 (where the plane was)
+		cube.position.y = -cubeSize/2;
+		
+		scene.add(cube);
+	}
+
+	// Hemisphere light
+	{
+		const skyColor = 0x8bb3ff; // light blue
+		const groundColor = 0xB97A20; // brownish orange
+		const intensity = 2;
+		const light = new THREE.HemisphereLight( skyColor, groundColor, intensity );
+		scene.add( light );
+	}
+
+	// Directional light
+	{
+		const color = 0xFFFFFF;
+		const intensity = 2.5;
+		const light = new THREE.DirectionalLight( color, intensity );
+		light.position.set( 5, 10, 2 );
+
+		light.castShadow = true;
+		light.shadow.mapSize.width = 2048;
+		light.shadow.mapSize.height = 2048;
+
+		scene.add( light );
+		scene.add( light.target );
+	}
+
+	// Ambient Light
+	{
+		const ambColor = 0xFF8BFC;
+		const intensity = 2;
+		const light = new THREE.AmbientLight(ambColor, intensity);
+		scene.add( light );
+	}
+
+	function frameArea( sizeToFitOnScreen, boxSize, boxCenter, camera ) {
+		const halfSizeToFitOnScreen = sizeToFitOnScreen * 0.5;
+		const halfFovY = THREE.MathUtils.degToRad( camera.fov * .5 );
+		const distance = (halfSizeToFitOnScreen / Math.tan( halfFovY )) + 4.5;
+		// compute a unit vector that points in the direction the camera is now
+		// in the xz plane from the center of the box
+		const direction = ( new THREE.Vector3() )
+			.subVectors( camera.position, boxCenter )
+			.multiply( new THREE.Vector3( 1, 0, 1 ) )
+			.normalize();
+
+		// move the camera to a position distance units way from the center
+		// in whatever direction the camera was from the center already
+		camera.position.copy( direction.multiplyScalar( distance ).add( boxCenter ) );
+
+		// pick some near and far values for the frustum that
+		// will contain the box.
+		camera.near = boxSize / 100;
+		camera.far = boxSize * 100;
+
+		camera.updateProjectionMatrix();
+
+		// point the camera to look at the center of the box
+		camera.lookAt( boxCenter.x, boxCenter.y, boxCenter.z);
+	}
+
+	// Spheres/Clouds
+	const spheres = [];
+	{
+		const r1 = 0.75;  
+		const r2 = 1;  
+		const r3 = 0.5;  
+		const widthSegments = 12;  
+		const heightSegments = 12;  
+		const s1 = new THREE.SphereGeometry( r1, widthSegments, heightSegments );
+		const s2 = new THREE.SphereGeometry( r2, widthSegments, heightSegments );
+		const s3 = new THREE.SphereGeometry( r3, widthSegments, heightSegments );
+
+		function makeInstance(geometry, color, x, y, z, scale) {
+            const material = new THREE.MeshPhongMaterial({ 
+                color,
+                emissive: color,
+                emissiveIntensity: 0.35,
+            });
+            const sphere = new THREE.Mesh(geometry, material);
+			sphere.receiveShadow = true;
+			sphere.position.set(x, y, z);
+			sphere.scale.set(scale, scale, scale);
+            scene.add(sphere);
+            
+            // Enable bloom on cubes
+            sphere.layers.enable(BLOOM_SCENE);
+            
+            return sphere;
+        }
+
+		const color = 0xffe68a;
+
+		// Generate random position
+		let x, y, z;
+			
+		// Ensure y is always positive (above the plane at y=0)
+		const radius = 30 + Math.random() * 15;
+		const theta = Math.random() * Math.PI * 2;
+		
+		// Calculate x and z using cylindrical coordinates
+		x = radius * Math.cos(theta);
+		z = radius * Math.sin(theta);
+		
+		// Set y to be always on floor
+		y = 0.375;
+		
+		// Random scale
+		const scale = 1 * (0.5 + Math.random());
+
+		// Create many clouds
+		for (let i = 0; i < params.cloudCount; i++) {
+			// Generate random position for each cloud
+			const radius = 10 + Math.random() * 15;
+			const theta = Math.random() * Math.PI * 2;
+			
+			// Calculate x and z using cylindrical coordinates
+			const x = radius * Math.cos(theta);
+			const z = radius * Math.sin(theta);
+			
+			// Set y to be always on floor 
+			const y = 0.3;
+			
+			// Random scale
+			const scale = 1 * (0.5 + Math.random());
+			
+			spheres.push(
+				makeInstance(s1, color, x, y, z, scale),
+				makeInstance(s2, color, x + (1 * scale), y + (0.125 * scale), z, scale),
+				makeInstance(s3, color, x + (2 * scale), y - (0.125 * scale), z, scale)
+			);
+		}
+		
+		// Add some special larger clouds
+		for (let i = 0; i < (params.cloudCount / 2); i++) {
+			// Generate random position for each cloud
+			const radius = 30 + Math.random() * 15;
+			const theta = Math.random() * Math.PI * 2;
+			
+			// Calculate x and z using cylindrical coordinates
+			const x = radius * Math.cos(theta);
+			const z = radius * Math.sin(theta);
+			
+			// Set y to be always on floor 
+			const y = 0.3;
+			
+			// Random scale
+			const scale = 1 * 2 * (1 + Math.random());
+			
+			spheres.push(
+				makeInstance(s1, color, x, y, z, scale),
+				makeInstance(s2, color, x + (1 * scale), y + (0.125 * scale), z, scale),
+				makeInstance(s3, color, x + (2 * scale), y - (0.125 * scale), z, scale)
+			);
+		}
+
+		// Add some special smaller clouds
+		for (let i = 0; i < (params.cloudCount / 5); i++) {
+			// Generate random position for each cloud
+			const radius = 2 + Math.random() * 15;
+			const theta = Math.random() * Math.PI * 2;
+			
+			// Calculate x and z using cylindrical coordinates
+			const x = radius * Math.cos(theta);
+			const z = radius * Math.sin(theta);
+			
+			// Set y to be always on floor 
+			const y = 0.3;
+			
+			// Random scale
+			const scale = 1 * 0.5 * (1 + Math.random());
+			
+			spheres.push(
+				makeInstance(s1, color, x, y, z, scale),
+				makeInstance(s2, color, x + (1 * scale), y + (0.125 * scale), z, scale),
+				makeInstance(s3, color, x + (2 * scale), y - (0.125 * scale), z, scale)
+			);
+		}
+	}
+
+	// Stars
+	const stars = [];
+	{
+		// Create a star shape geometry
+		function createStarGeometry(innerRadius = 0.4, outerRadius = 1, points = 5) {
+			const shape = new THREE.Shape();
+			const angleStep = Math.PI / points;
+			
+			// Start at the top
+			shape.moveTo(0, outerRadius);
+			
+			// Draw the star points
+			for (let i = 0; i < points * 2; i++) {
+				const radius = i % 2 === 0 ? innerRadius : outerRadius;
+				const angle = angleStep * (i + 1);
+				const x = Math.sin(angle) * radius;
+				const y = Math.cos(angle) * radius;
+				shape.lineTo(x, y);
+			}
+			
+			// Create a geometry from the shape
+			const geometry = new THREE.ExtrudeGeometry(shape, {
+				depth: 0.1,
+				bevelEnabled: false
+			});
+			
+			return geometry;
+		}
+		
+		// Star geometry with 5 points
+		const starGeometry = createStarGeometry(0.2, 0.5, 5);
+		
+		function makeRandomStar(geometry) {
+			// Random color from the palette
+			const colorIndex = Math.floor(Math.random() * params.starColors.length);
+			const color = new THREE.Color(params.starColors[colorIndex]);
+			
+			// Create emissive material for the star
+			const material = new THREE.MeshPhongMaterial({ 
+				color: color,
+				emissive: color,
+				emissiveIntensity: 0.8,
+				shininess: 100,
+				fog: false
+			});
+			
+			const star = new THREE.Mesh(geometry, material);
+			
+			// Generate random position
+			let x, y, z;
+			
+			// Ensure y is always positive (above the plane at y=0)
+			const radius = 10 + Math.random() * 15;
+			const theta = Math.random() * Math.PI * 2; // Random angle around y-axis
+			
+			// Calculate x and z using cylindrical coordinates
+			x = radius * Math.cos(theta);
+			z = radius * Math.sin(theta);
+			
+			// Set y to be always positive and above the plane
+			// Adding a minimum height of 3 units above the plane
+			y = Math.random() * 15;
+			
+			star.position.set(x, y, z);
+			
+			// Random rotation
+			star.rotation.x = Math.random() * Math.PI;
+			star.rotation.y = Math.random() * Math.PI;
+			star.rotation.z = Math.random() * Math.PI;
+			
+			// Random scale
+			const scale = params.starSize * (0.5 + Math.random());
+			star.scale.set(scale, scale, scale);
+			
+			scene.add(star);
+			
+			// Enable bloom on the star
+			star.layers.enable(BLOOM_SCENE);
+			
+			return star;
+		}
+		
+		// Create many stars
+		for (let i = 0; i < params.starCount; i++) {
+			stars.push(makeRandomStar(starGeometry));
+		}
+		
+		// Add some special larger stars
+		for (let i = 0; i < 3; i++) {
+			const specialStar = makeRandomStar(starGeometry);
+			const scale = params.starSize * 2 * (1 + Math.random());
+			specialStar.scale.set(scale, scale, scale);
+			specialStar.material.emissiveIntensity = 1.0;
+			stars.push(specialStar);
+		}
+	}
+
+	function dumpObject(obj, lines = [], isLast = true, prefix = '') {
+		const localPrefix = isLast ? '└─' : '├─';
+		lines.push(`${prefix}${prefix ? localPrefix : ''}${obj.name || '*no-name*'} [${obj.type}]`);
+		const newPrefix = prefix + (isLast ? '  ' : '│ ');
+		const lastNdx = obj.children.length - 1;
+		obj.children.forEach((child, ndx) => {
+			const isLast = ndx === lastNdx;
+			dumpObject(child, lines, isLast, newPrefix);
+		});
+		return lines;
+	}
+
+	function onPointerMove(event) {
+		// Calculate pointer position in normalized device coordinates
+		// (-1 to +1) for both components
+		const rect = canvas.getBoundingClientRect();
+		pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+		pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
+	}
+
+	function checkStarIntersection() {
+		// Update the picking ray with the camera and pointer position
+		raycaster.setFromCamera(pointer, camera);
+		
+		// Calculate objects intersecting the picking ray
+		// Create an array with all star objects to check
+		const starObjects = [...stars];
+		// Add the model stars if they exist
+		if (star) starObjects.push(star);
+		if (star_1) starObjects.push(star_1);
+		
+		const intersects = raycaster.intersectObjects(starObjects);
+		
+		// Restore previous hovered star's emission if we're now hovering over nothing
+		// or a different star
+		if (hoveredStar && (intersects.length === 0 || intersects[0].object !== hoveredStar)) {
+			hoveredStar.material.emissiveIntensity = params.normalIntensity;
+			hoveredStar = null;
+		}
+		
+		// Handle new intersection
+		if (intersects.length > 0) {
+			const intersectedStar = intersects[0].object;
+			
+			// Only process if it's a new hover (not already hovering this star)
+			if (hoveredStar !== intersectedStar) {
+				// Set the new hovered star
+				hoveredStar = intersectedStar;
+				
+				// Increase emission intensity
+				hoveredStar.material.emissiveIntensity = params.hoverIntensity;
+			}
+		}
+	}
+
+	canvas.addEventListener('mousemove', onPointerMove);
+
+	// GLTF/GLB Loader
+	{
+		const gltfLoader = new GLTFLoader();
+		gltfLoader.load( 'src/resources/threejsTest.glb', ( gltf ) => {
+			const root = gltf.scene;
+			scene.add( root );
+
+			console.log(dumpObject(root).join('\n'));
+
+			star = root.getObjectByName('star');
+			star_1 = root.getObjectByName('star_1');
+
+			root.traverse((obj) => {
+				if (obj.castShadow !== undefined) {
+					obj.castShadow = true;
+					obj.receiveShadow = true;
+				}
+
+				if (obj.name === 'Head' || obj.name === 'ears' || obj.name === 'legs' || obj.name === 'arms' || obj.name === 'neck') {
+					if (obj.material) {
+						if (obj.material.shininess !== undefined) {
+							obj.material.shininess = 0; 
+						}
+						
+						if (obj.material.metalness !== undefined) {
+							obj.material.metalness = 0; 
+						}
+						if (obj.material.roughness !== undefined) {
+							obj.material.roughness = 0.4; 
+						}
+					}
+				}
+
+				if (obj.name === 'lashes' || obj.name === 'socks' || obj.name === 'skirt' || obj.name === 'bra') {
+					if (obj.material) {
+						if (obj.material.shininess !== undefined) {
+							obj.material.shininess = 0; 
+						}
+						
+						if (obj.material.metalness !== undefined) {
+							obj.material.metalness = 0; 
+						}
+						if (obj.material.roughness !== undefined) {
+							obj.material.roughness = 0.7; 
+						}
+					}
+				}
+
+				if (obj.name === 'star' || obj.name === 'star_1') {
+					obj.layers.enable(BLOOM_SCENE);
+
+					if (obj.material) {
+						const ogColor = obj.material.color.clone();
+						obj.material.emissive = ogColor;
+						obj.material.emissiveIntensity = 0.55;
+					}
+				}
+
+				if (obj.name === 'Box') {
+					if (obj.material) {
+						if (obj.material.shininess !== undefined) {
+							obj.material.shininess = 0.1; 
+						}
+						
+						if (obj.material.metalness !== undefined) {
+							obj.material.metalness = 0.5; 
+						}
+						if (obj.material.roughness !== undefined) {
+							obj.material.roughness = 0.1; 
+						}
+					}
+				}
+			});
+
+			// compute the box that contains all the stuff
+			// from root and below
+			const box = new THREE.Box3().setFromObject( root );
+
+			const boxSize = box.getSize( new THREE.Vector3() ).length();
+			const boxCenter = box.getCenter( new THREE.Vector3() );
+			boxCenter.y += 0.75;
+
+			// set the camera to frame the box
+			frameArea( boxSize * 0.5, boxSize, boxCenter, camera );
+
+			// update the Trackball controls to handle the new size
+			controls.maxDistance = boxSize * 10;
+			controls.target.copy( boxCenter );
+			controls.update();
+		} );
+	}
+
+	// Define shader for combining renders
+    const shaderMaterial = new THREE.ShaderMaterial({
+        uniforms: {
+            baseTexture: { value: null },
+            bloomTexture: { value: null }
+        },
+        vertexShader: `
+            varying vec2 v_UV;
+            void main() {
+                v_UV = uv;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+            }
+        `,
+        fragmentShader: `
+            uniform sampler2D baseTexture;
+            uniform sampler2D bloomTexture;
+            varying vec2 v_UV;
+            void main() {
+                gl_FragColor = ( texture2D( baseTexture, v_UV ) + vec4( 1.0 ) * texture2D( bloomTexture, v_UV ) );
+            }
+        `
+    });
+
+	// Post-processing setup for selective bloom
+    // Main scene render
+    const renderScene = new RenderPass(scene, camera);
+    
+    // Bloom composer - only renders bloom objects
+    const bloomComposer = new EffectComposer(renderer);
+    bloomComposer.renderToScreen = false;
+    bloomComposer.addPass(renderScene);
+    
+    // Bloom pass with UnrealBloom
+    const bloomPass = new UnrealBloomPass(
+        new THREE.Vector2(window.innerWidth, window.innerHeight),
+        params.strength,
+        params.radius,
+        params.threshold
+    );
+    bloomComposer.addPass(bloomPass);
+    
+    // Final composer with combined rendering
+    const finalComposer = new EffectComposer(renderer);
+    finalComposer.addPass(renderScene);
+    
+    // Mix pass to combine normal scene and bloom
+    const mixPass = new ShaderPass(
+        shaderMaterial,
+        'baseTexture'
+    );
+    mixPass.uniforms['bloomTexture'].value = bloomComposer.renderTarget2.texture;
+    finalComposer.addPass(mixPass);
+    
+    // Output pass
+    const outputPass = new OutputPass();
+    finalComposer.addPass(outputPass);
+    
+    // GUI
+    const gui = new GUI();
+    {
+        const bloomFolder = gui.addFolder('Bloom Effect');
+        bloomFolder.add(params, 'threshold', 0, 1).onChange(value => {
+            bloomPass.threshold = Number(value);
+        });
+        bloomFolder.add(params, 'strength', 0, 3).onChange(value => {
+            bloomPass.strength = Number(value);
+        });
+        bloomFolder.add(params, 'radius', 0, 1).step(0.01).onChange(value => {
+            bloomPass.radius = Number(value);
+        });
+        bloomFolder.open();
+        
+        const toneMappingFolder = gui.addFolder('Tone Mapping');
+        toneMappingFolder.add(params, 'exposure', 0.1, 2).onChange(value => {
+            renderer.toneMappingExposure = Math.pow(value, 4.0);
+        });
+        
+        const sceneFolder = gui.addFolder('Scene');
+        sceneFolder.add(params, 'starRotation').name('Rotate Stars');
+        sceneFolder.open();
+    }
+
+	// Helper functions for selective bloom
+    function darkenNonBloomed() {
+        scene.traverse(obj => {
+            if (obj.isMesh && bloomLayer.test(obj.layers) === false) {
+                materials[obj.uuid] = obj.material;
+                obj.material = darkMaterial;
+            }
+        });
+    }
+    
+    function restoreMaterials() {
+        scene.traverse(obj => {
+            if (materials[obj.uuid]) {
+                obj.material = materials[obj.uuid];
+                delete materials[obj.uuid];
+            }
+        });
+    }
+
+	function resizeRendererToDisplaySize(renderer) {
+		const canvas = renderer.domElement;
+		const width = canvas.clientWidth;
+		const height = canvas.clientHeight;
+		const needResize = canvas.width !== width || canvas.height !== height;
+		
+		if (needResize) {
+			renderer.setSize(width, height, false);
+			bloomComposer.setSize(width, height);
+			finalComposer.setSize(width, height);
+		}
+		
+		return needResize;
+	}
+
+	// Animation loop
+    let then = 0;
+    function render(now) {
+        now *= 0.001; // convert to seconds
+        const deltaTime = now - then;
+        then = now;
+        
+        if (resizeRendererToDisplaySize(renderer)) {
+            const canvas = renderer.domElement;
+            camera.aspect = canvas.clientWidth / canvas.clientHeight;
+            camera.updateProjectionMatrix();
+        }
+
+		checkStarIntersection();
+        
+        // Animate stars
+        if (params.starRotation) {
+            stars.forEach((star, ndx) => {
+                const speed = 1 + ndx * 0.1;
+                const rot = now * speed;
+                star.rotation.x = rot;
+                star.rotation.y = rot;
+            });
+        }
+
+		// Animate clouds
+		const cloudSpeed = 0.0015; // Adjust for desired speed
+		const maxX = 40; // Right boundary
+		const minX = -40; // Left boundary (reset point)
+
+		// Move clouds from left to right
+		spheres.forEach(sphere => {
+			sphere.position.x += cloudSpeed;
+
+			// If the cloud moves past maxX, reset it to minX
+			if (sphere.position.x > maxX) {
+				sphere.position.x = minX;
+			}
+		});
+        
+        // Render with selective bloom
+        // 1. Darken non-bloomed objects
+        darkenNonBloomed();
+        // 2. Render only bloom objects
+        bloomComposer.render();
+        // 3. Restore original materials
+        restoreMaterials();
+        // 4. Render final composition
+        finalComposer.render();
+        
+        requestAnimationFrame(render);
+    }
+    
+	requestAnimationFrame(render);
+}
+
+main();
+</script>
+</html>
